@@ -1,0 +1,11 @@
+# Python dependencies
+
+fastapi
+uvicorn
+requests
+python-multipart
+pydantic
+networkx
+rich
+click
+tree_sitter

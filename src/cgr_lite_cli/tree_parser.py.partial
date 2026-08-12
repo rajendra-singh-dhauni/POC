@@ -1,0 +1,64 @@
+import os
+import subprocess
+from pathlib import Path
+from tree_sitter import Language, Parser
+
+GRAMMAR_LIB = Path('.cgr') / 'build' / 'my-languages.so'
+VENDOR = Path('vendor')
+TS_DART_REPO = VENDOR / 'tree-sitter-dart'
+
+class DartTreeParser:
+    def __init__(self):
+        self.lib_path = GRAMMAR_LIB
+        self.language = None
+        self.parser = None
+
+    def ensure_grammar_built(self) -> None:
+        if self.lib_path.exists():
+            return
+        # create vendor dir
+        VENDOR.mkdir(exist_ok=True)
+        # clone if needed
+        if not TS_DART_REPO.exists():
+            print('Cloning tree-sitter-dart grammar...')
+            subprocess.check_call(['git','clone','https://github.com/tree-sitter/tree-sitter-dart', str(TS_DART_REPO)])
+        # build library
+        self.lib_path.parent.mkdir(parents=True, exist_ok=True)
+        print('Building Tree-sitter Dart grammar (requires cmake and a C toolchain)...')
+        Language.build_library(
+            str(self.lib_path),
+            [str(TS_DART_REPO)]
+        )
+
+    def _ensure_parser(self):
+        if self.parser is not None:
+            return
+        if not self.lib_path.exists():
+            raise RuntimeError('Grammar library not found; run ensure_grammar_built()')
+        lang = Language(str(self.lib_path), 'dart')
+        self.language = lang
+        p = Parser()
+        p.set_language(lang)
+        self.parser = p
+
+    def parse_file(self, path: Path):
+        self._ensure_parser()
+        data = path.read_bytes()
+        tree = self.parser.parse(data)
+        return tree.root_node, 'dart'
+
+    def extract_functions(self, root, path: Path):
+        # return list of dict: {name, start_line, end_line}
+        funcs = []
+        source = path.read_bytes()
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            # Tree-sitter dart top-level functions are often 'function_declaration'
+            if node.type in ('function_declaration', 'function_definition'):
+                name_node = None
+                for ch in node.children:
+                    if ch.type == 'identifier':
+                        name_node = ch
+                        break
+                        
