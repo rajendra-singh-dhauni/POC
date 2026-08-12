@@ -10,6 +10,7 @@ from .clone_and_index import clone_and_index_repo
 from .llm_provider import GeminiClient
 from .docgen_api import generate_docs_for_job
 from .cr_engine import propose_cr, apply_patch
+from .git_integration import create_branch_and_push, create_pull_request
 
 APP_DIR = Path(__file__).resolve().parent
 WORK_DIR = APP_DIR.parent / '.cgr' / 'repos'
@@ -40,6 +41,13 @@ class ApplyCRPayload(BaseModel):
     job_id: str
     patch: str | None = None
     mode: str | None = 'dry'
+    verify: bool | None = True
+
+class PRPayload(BaseModel):
+    job_id: str
+    branch_name: str
+    pr_title: str | None = None
+    pr_body: str | None = None
 
 
 @app.post("/api/submit-repo")
@@ -91,14 +99,55 @@ def api_apply_cr(payload: ApplyCRPayload):
     job_id = payload.job_id
     patch = payload.patch
     mode = payload.mode or 'dry'
+    verify = payload.verify if payload.verify is not None else True
     job_root = WORK_DIR / job_id
     if not job_root.exists():
         raise HTTPException(status_code=404, detail="Job not found")
     try:
-        res = apply_patch(job_root, patch or '', mode=mode)
+        res = apply_patch(job_root, patch or '', mode=mode, verify=verify)
         jobs.setdefault(job_id, {"status":"unknown","logs":[]})
-        jobs[job_id]["logs"].append(f"apply-cr: mode={mode}")
+        jobs[job_id]["logs"].append(f"apply-cr: mode={mode} verify={verify}")
         return JSONResponse(res)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/commit-pr")
+def api_commit_pr(payload: PRPayload):
+    job_id = payload.job_id
+    branch_name = payload.branch_name
+    title = payload.pr_title or f'cgr-lite: changes for {job_id}'
+    body = payload.pr_body or ''
+    job_root = WORK_DIR / job_id
+    if not job_root.exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        # create branch, commit & push
+        out = create_branch_and_push(job_root / 'repo', branch_name)
+        # create PR via GitHub API (extract owner/repo from original remote)
+        # We assume the repo was cloned from GitHub and remote origin points to https://github.com/owner/repo.git
+        # Read remote URL
+        import subprocess
+        rem = subprocess.check_output(['git', 'remote', 'get-url', 'origin'], cwd=str(job_root / 'repo')).decode('utf-8').strip()
+        # normalize
+        if rem.endswith('.git'):
+            rem = rem[:-4]
+        # handle https or git@ formats
+        owner_repo = None
+        if rem.startswith('https://github.com/'):
+            owner_repo = rem[len('https://github.com/'):]
+        elif rem.startswith('git@github.com:'):
+            owner_repo = rem[len('git@github.com:'):]
+        else:
+            owner_repo = None
+        if owner_repo:
+            owner, repo = owner_repo.split('/')[:2]
+            pr = create_pull_request(owner, repo, head=branch_name, title=title, body=body)
+        else:
+            pr = {'warning': 'could not determine owner/repo from remote origin; PR not created'}
+        jobs.setdefault(job_id, {"status":"unknown","logs":[]})
+        jobs[job_id]["logs"].append(f"commit-pr: branch={branch_name}")
+        return JSONResponse({'push': out, 'pr': pr})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

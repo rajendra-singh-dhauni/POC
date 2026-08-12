@@ -10,6 +10,9 @@ function App(){
   const [impact, setImpact] = useState(null);
   const [patchPreview, setPatchPreview] = useState(null);
 
+  const [branchName, setBranchName] = useState('cgr-lite-changes');
+  const [prTitle, setPrTitle] = useState('CGR: Proposed changes');
+
   const submit = async () => {
     const resp = await axios.post('/api/submit-repo', { repo_url: repoUrl });
     setJobId(resp.data.job_id);
@@ -30,7 +33,13 @@ function App(){
 
   const applyCR = async (mode='dry') => {
     if(!jobId) return;
-    const resp = await axios.post('/api/apply-cr', { job_id: jobId, patch: patchPreview, mode });
+    const resp = await axios.post('/api/apply-cr', { job_id: jobId, patch: patchPreview, mode, verify: true });
+    alert(JSON.stringify(resp.data));
+  }
+
+  const commitAndPR = async () => {
+    if(!jobId) return;
+    const resp = await axios.post('/api/commit-pr', { job_id: jobId, branch_name: branchName, pr_title: prTitle });
     alert(JSON.stringify(resp.data));
   }
 
@@ -62,6 +71,12 @@ function App(){
           <button onClick={()=>applyCR('apply')}>Apply (apply)</button>
         </div>}
 
+        <hr />
+        <h3>Commit & Create PR</h3>
+        <input style={{width:'60%'}} value={branchName} onChange={e=>setBranchName(e.target.value)} />
+        <input style={{width:'60%'}} value={prTitle} onChange={e=>setPrTitle(e.target.value)} />
+        <br />
+        <button onClick={commitAndPR}>Commit & Open Draft PR</button>
       </div>}
     </div>
   )
